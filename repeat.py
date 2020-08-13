@@ -8,6 +8,8 @@ import time
 import matplotlib as mpl
 from cycler import cycler
 from collections import Counter
+import random 
+from scipy.special import comb
 
 marker = itertools.cycle(('d', 'v', 'o', '*'))
 
@@ -59,7 +61,7 @@ def score(A, weights, method, alpha = None, beta = None):
         A_jk = np.transpose(np.tile(A, (N, 1, 1)), (2, 0, 1))
         A_in =  np.sum((A.transpose()+A_jk) * np.heaviside(A.transpose()*A_jk, 0), 2)
         A_cross =  np.sum((A.transpose()+A_kj) * np.heaviside(A.transpose()*A_kj, 0), 2) + np.sum((A+A_jk) * np.heaviside(A*A_jk, 0), 2)
-        A_CN = beta * (A_out )+ (1-beta) * A_in
+        A_CN = beta * (A_out)+ (1-beta) * A_in
 
     "calculate closeness"
     G = nx.from_numpy_matrix(A)
@@ -276,44 +278,60 @@ def beta_n(method, snapshot_num, beta_set, n, S, plot, alpha=None, beta=None):
     #plt.show()
     return prediction, success_rate
 
-def remove_edge(snapshot_num, remove_fraction, times, weights, method, total_runs):
+def random_combination(iterable, r):
+    """Random selection from itertools.combinations(iterable, r)
+    
+    """
+    pool = tuple(iterable)
+    n = len(pool)
+    indices = sorted(random.sample(range(n), r))
+    return tuple(pool[i] for i in indices)
+
+def remove_edge(snapshot_num, remove_fraction, times, weights, method, total_runs, S, beta):
     """TODO: Docstring for restoration.
 
     :arg1: TODO
     :returns: TODO
 
     """
-    A_undirected, A_unweighted, node_list, M = undirect_unweight(snapshot_num)  
-    N = np.size(A_undirected, 1)
+    # A_undirected, A_unweighted, node_list, M = undirect_unweight(snapshot_num)  
+    A_actual, A_undirected, A_unweighted, node_list, M, A_total, A_total_unweighted = merge_weights(snapshot_num, S)
+    N = np.size(A_actual, 1)
     A_unweighted_list = np.ravel(np.tril(A_unweighted))
     A_undirected_list = np.ravel(np.tril(A_undirected))
+    A_actual_list = np.ravel(A_actual)
 
-    exist_index = np.where(A_unweighted_list == 1)[0]
+    exist_index = np.where(A_actual_list > 0)[0]
     M = np.size(exist_index) # number of edges
+    m = np.arange(M)
     remove_num = round(M * remove_fraction)
     add_num = remove_num * times
-    m = np.arange(M)
-    comb = list(itertools.combinations(m, remove_num))
-    np.random.shuffle(comb)
-    
-    total_possible = len(comb)
-    total_num = min(total_possible, total_runs)
+    comb_num = int(comb(M, remove_num))
+    total_num = min(comb_num, total_runs)
 
     remove_set = np.zeros((total_num, remove_num))
     success_set = np.ones((total_num, remove_num)) * (-1)
     miss_set = np.ones((total_num, remove_num)) * (-1)
     failure_set = np.ones((total_num, add_num)) * (-1)
 
-    for choice, i in zip(comb[: total_num], range(total_num)):
-        A_change = A_undirected_list.copy()
+    for i in range(total_num):
+        choice = random_combination(m, remove_num)
+        A_change = A_actual_list.copy()
         remove_edges = exist_index[list(choice)]
         A_change[remove_edges] = 0
         A_matrix = A_change.reshape(N, N)
         if weights == 'unweighted':
-            A = np.heaviside(A_matrix, 0)
+            A_undirected = A_matrix + A_matrix.transpose()
+            A = np.heaviside(A_undirected, 0)
         elif weights == 'weighted':
+            A = A_matrix + A_matrix.transpose()
+        if weights == 'directed':
             A = A_matrix
-        score_matrix = score(A, weights, method)
+        "edge ij and edge ji share the same score."
+        score_matrix = score(A, weights, method, beta=beta)
+        "don't consider existing edges"
+        # score_matrix[A>0] = 0
+        score_matrix[A_matrix>0] = 0
         np.fill_diagonal(score_matrix, -1)
         sort_score = np.argsort(score_matrix, axis=None)[::-1]
         add_edges = sort_score[:int(add_num)]
@@ -328,7 +346,76 @@ def remove_edge(snapshot_num, remove_fraction, times, weights, method, total_run
 
     return remove_set, success_set, miss_set, failure_set
 
-def restoration_all(remove_fraction, times, weights, method, total_runs):
+def remove_edge_beta(snapshot_num, remove_fraction, times, weights, method, total_runs, S, beta):
+    """TODO: Docstring for restoration.
+
+    :arg1: TODO
+    :returns: TODO
+
+    """
+    # A_undirected, A_unweighted, node_list, M = undirect_unweight(snapshot_num)  
+    A_actual, A_undirected, A_unweighted, node_list, M, A_total, A_total_unweighted = merge_weights(snapshot_num, S)
+    N = np.size(A_actual, 1)
+    A_unweighted_list = np.ravel(np.tril(A_unweighted))
+    A_undirected_list = np.ravel(np.tril(A_undirected))
+    A_actual_list = np.ravel(A_actual)
+
+    exist_index = np.where(A_actual_list > 0)[0]
+    M = np.size(exist_index) # number of edges
+    m = np.arange(M)
+    remove_num = round(M * remove_fraction)
+    add_num = remove_num * times
+    comb_num = int(comb(M, remove_num))
+    total_num = min(comb_num, total_runs)
+
+    remove_set = np.zeros((total_num, remove_num))
+    success_set = np.ones((total_num, remove_num)) * (-1)
+    miss_set = np.ones((total_num, remove_num)) * (-1)
+    failure_set = np.ones((total_num, add_num)) * (-1)
+
+    for i in range(total_num):
+        choice = random_combination(m, remove_num)
+        A_change = A_actual_list.copy()
+        remove_edges = exist_index[list(choice)]
+        A_change[remove_edges] = 0
+        A_matrix = A_change.reshape(N, N)
+        if weights == 'unweighted':
+            A_undirected = A_matrix + A_matrix.transpose()
+            A = np.heaviside(A_undirected, 0)
+        elif weights == 'weighted':
+            A = A_matrix + A_matrix.transpose()
+        if weights == 'directed':
+            A = A_matrix
+        "edge ij and edge ji share the same score."
+        score_matrix0 = score(A, weights, method, beta=0)
+        score_matrix1 = score(A, weights, method, beta=1)
+        "don't consider existing edges"
+        # score_matrix[A>0] = 0
+        score_matrix0[A_matrix>0] = 0
+        score_matrix1[A_matrix>0] = 0
+        np.fill_diagonal(score_matrix0, -1)
+        np.fill_diagonal(score_matrix1, -1)
+        sort_score0 = np.argsort(score_matrix0, axis=None)[::-1]
+        sort_score1 = np.argsort(score_matrix1, axis=None)[::-1]
+        add_edges0 = sort_score0[:int(add_num*2*beta)]
+        add_edges1 = sort_score1[:int(add_num*2*(1-beta))]
+        add_edges_num = np.size(add_edges0) + np.size(add_edges1)
+        add_edges = np.ones((add_edges_num)) * (-1)
+        add_edges[np.linspace(0, add_edges_num-1, np.size(add_edges0), dtype=int)] = add_edges0
+        add_edges[add_edges==-1] = add_edges1
+        add_edges = np.unique(add_edges)[:add_num]
+        success = np.intersect1d(remove_edges, add_edges)
+        miss = np.setdiff1d(remove_edges, success)
+        failure = np.setdiff1d(add_edges, success)
+
+        remove_set[i] = remove_edges
+        success_set[i, :np.size(success)] = success
+        miss_set[i, :np.size(miss)] = miss
+        failure_set[i, :np.size(failure)] = failure
+
+    return remove_set, success_set, miss_set, failure_set
+
+def restoration_all(remove_fraction, times, weights, method, total_runs, S, beta):
     """TODO: Docstring for restoration_all.
     :returns: TODO
 
@@ -341,7 +428,10 @@ def restoration_all(remove_fraction, times, weights, method, total_runs):
     Time = []
     for i in range(11):
         t1 = time.time()
-        remove, success, miss, failure = remove_edge(i+1, remove_fraction, times, weights, method, total_runs)
+        if weights == 'directed':
+            remove, success, miss, failure = remove_edge_beta(i+1, remove_fraction, times, weights, method, total_runs, S, beta)
+        else:
+            remove, success, miss, failure = remove_edge(i+1, remove_fraction, times, weights, method, total_runs, S, beta)
         t2 = time.time()
         print(i, t2-t1)
         remove_set.append(remove)
@@ -759,6 +849,163 @@ def illu_motif():
         plt.subplots_adjust(left=0.02, right=0.98, wspace=0.25, hspace=0.25, bottom=0.02, top=0.98)
         plt.show()
 
+def restore_statana(remove_fraction, times, weights, method, total_runs, S, beta):
+    """TODO: Docstring for restore_statana.
+
+    :remove_fraction: TODO
+    :times: TODO
+    :weights: TODO
+    :method: TODO
+    :total_runs: TODO
+    :S: TODO
+    :beta: TODO
+    :returns: TODO
+
+    """
+    remove_set, success_set, miss_set, failure_set, Time = restoration_all(remove_fraction, times, weights, method, total_runs, S, beta)
+
+    success_rate_set = []
+    success_rate_positive_set = []
+    individual_rate_set = []  # restored edges / removed edges for each edge. 
+    success_num = []
+    total_num = []
+    for i in range(11):
+        remove = remove_set[i]
+        remove_num = np.size(remove, 1)
+        remove_edges = np.unique(remove)
+        individual = np.zeros((np.size(remove_edges)))
+        for remove_one, j in zip(remove_edges, range(np.size(remove_edges))):
+            index = np.where(remove_one == remove)[0]
+            individual_set = success_set[i][index]
+            individual_success = np.sum(individual_set != (-1), 1)
+            individual[j] = np.mean(individual_success) /remove_num 
+        individual_rate_set.append(individual)
+        success = np.sum(success_set[i] != (-1), 1)
+        add_num = np.size(failure_set[i], 1)
+        success_rate_set.append(np.mean(success) / remove_num)
+        success_positive = success[success > 0]
+        success_rate_positive_set.append( np.mean(success_positive) /remove_num)
+        success_label = success_set[i][success_set[i] != (-1)]
+        miss_label = miss_set[i][miss_set[i] != (-1)]
+        failure_label = failure_set[i][failure_set[i] != (-1)]
+        success_occurence = np.array(list(Counter(success_label).items()))
+        success_num.append(np.size(success_occurence, 0))
+        total_num.append(np.size(remove_edges))
+
+
+
+    plt.plot(np.arange(11)+1, success_num, 'o--', label='restored edges')
+    plt.plot(np.arange(11)+1, total_num, 'o--', label='total edges')
+    plt.xlabel('Snapshot', fontsize=fs)
+    plt.ylabel('Number of edges', fontsize=fs)
+    plt.subplots_adjust(left=0.15, right=0.90, wspace=0.25, hspace=0.25, bottom=0.15, top=0.98)
+    plt.xticks(fontsize=ticksize)
+    plt.yticks(fontsize=ticksize)
+    plt.legend(fontsize=legendsize)
+    #plt.legend(bbox_to_anchor=(0.98, 1.0))
+    plt.show()
+
+    plot_min = np.min([np.min(individual_rate_set[i]) for i in range(11)])
+    plot_max = np.max([np.max(individual_rate_set[i]) for i in range(11)])
+
+    for i in range(1):
+        hist, bins = np.histogram(individual_rate_set[i], 50, (plot_min, plot_max))
+        plt.plot(bins[:-1], hist, '.-', label=f'{i+1}')
+
+    plt.xlabel('$P$', fontsize=fs)
+    plt.ylabel('Number of edges', fontsize=fs)
+    plt.subplots_adjust(left=0.15, right=0.90, wspace=0.25, hspace=0.25, bottom=0.15, top=0.98)
+    plt.xticks(fontsize=ticksize)
+    plt.yticks(fontsize=ticksize)
+    plt.legend(fontsize=legendsize)
+    #plt.legend(bbox_to_anchor=(0.98, 1.0))
+    plt.show()
+
+def restore_data(remove_fraction, times, weights, method, total_runs, S, beta):
+    """TODO: Docstring for restore_statana.
+
+    :remove_fraction: TODO
+    :times: TODO
+    :weights: TODO
+    :method: TODO
+    :total_runs: TODO
+    :S: TODO
+    :beta: TODO
+    :returns: TODO
+
+    """
+
+    remove_set, success_set, miss_set, failure_set, Time = restoration_all(remove_fraction, times, weights, method, total_runs, S, beta)
+
+    success_rate_set = []
+    success_rate_positive_set = []
+    for i in range(11):
+        remove = remove_set[i]
+        remove_num = np.size(remove, 1)
+        remove_edges = np.unique(remove)
+        success = np.sum(success_set[i] != (-1), 1)
+        add_num = np.size(failure_set[i], 1)
+        success_rate_set.append(np.mean(success) / remove_num)
+        success_positive = success[success > 0]
+        success_rate_positive_set.append( np.mean(success_positive) /remove_num)
+    return success_rate_set, success_rate_positive_set
+
+def plot_success(remove_fraction, times, weights, method, total_runs, S, beta):
+    """TODO: Docstring for restore_statana.
+
+    :remove_fraction: TODO
+    :times: TODO
+    :weights: TODO
+    :method: TODO
+    :total_runs: TODO
+    :S: TODO
+    :beta: TODO
+    :returns: TODO
+
+    """
+
+    success_rate_set, success_rate_positive_set = restore_data(remove_fraction, times, weights, method, total_runs, S, beta)
+
+    plt.plot(np.arange(11)+1, success_rate_set, 'o--', label='all runs')
+    plt.plot(np.arange(11)+1, success_rate_positive_set, 'o--', label='included recall>0)')
+    plt.xlabel('Snapshot', fontsize=fs)
+    plt.ylabel('average recall', fontsize=fs)
+    plt.subplots_adjust(left=0.15, right=0.90, wspace=0.25, hspace=0.25, bottom=0.15, top=0.98)
+    plt.xticks(fontsize=ticksize)
+    plt.yticks(fontsize=ticksize)
+    plt.legend(fontsize=legendsize)
+    #plt.legend(bbox_to_anchor=(0.98, 1.0))
+    plt.show()
+    return success_rate_set, success_rate_positive_set
+
+def plot_compare(remove_fraction, times, method, total_runs, S, beta_set):
+    """TODO: Docstring for plot_compare.
+
+    :arg1: TODO
+    :returns: TODO
+
+    """
+    for beta in beta_set:
+        beta = round(beta, 2)
+        success_rate_set, success_rate_positive_set = restore_data(remove_fraction, times, 'directed', method, total_runs, S, beta)
+        plt.plot(np.arange(11)+1, success_rate_set, 'o--', label=f'$\\beta={beta}$')
+        # plt.plot(np.arange(11)+1, success_rate_positive_set, 'o--', label='included recall>0)')
+    success_rate_set, success_rate_positive_set = restore_data(remove_fraction, times, 'weighted', method, total_runs, S, beta)
+    plt.plot(np.arange(11)+1, success_rate_set, 'o--', label='weighted')
+    success_rate_set, success_rate_positive_set = restore_data(remove_fraction, times, 'unweighted', method, total_runs, S, beta)
+    plt.plot(np.arange(11)+1, success_rate_set, 'o--', label='unweighted')
+
+
+    plt.xlabel('Snapshot', fontsize=fs)
+    plt.ylabel('average recall', fontsize=fs)
+    plt.subplots_adjust(left=0.15, right=0.90, wspace=0.25, hspace=0.25, bottom=0.15, top=0.98)
+    plt.xticks(fontsize=ticksize)
+    plt.yticks(fontsize=ticksize)
+    plt.legend(fontsize=legendsize)
+    #plt.legend(bbox_to_anchor=(0.98, 1.0))
+    plt.show()
+
+
 ticksize = 15
 legendsize = 14
 fs = 20 
@@ -766,6 +1013,7 @@ fs = 20
 a = 0.99999
 S = 'inf'
 S = 100
+S = 0
 plot_range = np.arange(2, 9, 1)
 plot_type = 'M_num'
 plot_type = 'num'
@@ -774,22 +1022,23 @@ plot_type = 'percent'
 # visualization(2, 0)
 # new_edge_pattern(S, a)
 # plot_motif(S, a, plot_range, plot_type)
-illu_motif()
+# illu_motif()
 
 
 method = 'CCPA'
 method = 'CN'
-weights = 'unweighted'
 weights = 'directed'
+weights = 'unweighted'
 alpha = np.arange(0,1.1,0.1)
 beta = 0
-beta_set = np.arange(0, 1, 0.2)
+beta_set = np.arange(0, 1.1, 2)
+beta_set = np.arange(0, 1.1, 0.2)
 n = np.arange(0.1, 0.6, 0.1)
 plot = 'prediction'
 plot = 'success'
 remove_fraction = 0.1
 times = 2
-total_runs = 10000
+total_runs = 1000
 # success_set = CCPA(alpha, weights, 0.25, S)
 # change_n(weights, method, n, S, plot, beta=beta)
 # beta_n(method, 4, beta_set, n, S, plot, beta=beta)
@@ -797,67 +1046,4 @@ total_runs = 10000
 # CCPA(alpha, weights, 0.25, S, beta=beta)
 # forget_effect(np.arange(0,100,10), weights, method, 0.25)
 
-#remove_set, success_set, miss_set, failure_set, Time = restoration_all(remove_fraction, times, weights, method, total_runs)
-
-
-success_rate_set = []
-success_rate_positive_set = []
-individual_rate_set = []
-success_num = []
-total_num = []
-for i in range(11):
-    remove = remove_set[i]
-    remove_num = np.size(remove, 1)
-    remove_edges = np.unique(remove)
-    individual = np.zeros((np.size(remove_edges)))
-    for remove_one, j in zip(remove_edges, range(np.size(remove_edges))):
-        index = np.where(remove_one == remove)[0]
-        individual_set = success_set[i][index]
-        individual_success = np.sum(individual_set != (-1), 1)
-        individual[j] = np.mean(individual_success) /remove_num 
-    individual_rate_set.append(individual)
-    success = np.sum(success_set[i] != (-1), 1)
-    add_num = np.size(failure_set[i], 1)
-    success_rate_set.append(np.mean(success) / remove_num)
-    success_positive = success[success > 0]
-    success_rate_positive_set.append( np.mean(success_positive) /remove_num)
-    success_label = success_set[i][success_set[i] != (-1)]
-    miss_label = miss_set[i][miss_set[i] != (-1)]
-    failure_label = failure_set[i][failure_set[i] != (-1)]
-    success_occurence = np.array(list(Counter(success_label).items()))
-    success_num.append(np.size(success_occurence, 0))
-    total_num.append(np.size(remove_edges))
-
-
-
-plt.plot(np.arange(11)+1, success_num, 'o--', label='restored edges')
-plt.plot(np.arange(11)+1, total_num, 'o--', label='total edges')
-plt.xlabel('Snapshot', fontsize=fs)
-plt.ylabel('Number of edges', fontsize=fs)
-plt.subplots_adjust(left=0.15, right=0.90, wspace=0.25, hspace=0.25, bottom=0.15, top=0.98)
-plt.xticks(fontsize=ticksize)
-plt.yticks(fontsize=ticksize)
-plt.legend(fontsize=legendsize)
-#plt.legend(bbox_to_anchor=(0.98, 1.0))
-plt.show()
-
-plot_min = np.min([np.min(individual_rate_set[i]) for i in range(11)])
-plot_max = np.max([np.max(individual_rate_set[i]) for i in range(11)])
-
-for i in range(1):
-    hist, bins = np.histogram(individual_rate_set[i], 50, (plot_min, plot_max))
-    plt.plot(bins[:-1], hist, '.-', label=f'{i+1}')
-
-plt.xlabel('$P$', fontsize=fs)
-plt.ylabel('Number of edges', fontsize=fs)
-plt.subplots_adjust(left=0.15, right=0.90, wspace=0.25, hspace=0.25, bottom=0.15, top=0.98)
-plt.xticks(fontsize=ticksize)
-plt.yticks(fontsize=ticksize)
-plt.legend(fontsize=legendsize)
-#plt.legend(bbox_to_anchor=(0.98, 1.0))
-plt.show()
-
-
-
-
-
+plot_compare(remove_fraction, times, method, total_runs, S, beta_set)
