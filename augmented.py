@@ -7,11 +7,7 @@ from cycler import cycler
 import itertools
 import time 
 import collections
-import sklearn.metrics as skmetrics
-from sklearn.datasets import load_iris
-from sklearn.linear_model import LogisticRegression
-from sklearn import svm
-import scikitplot as skplt
+import multiprocessing as mp
 from numpy import linalg as LA  
 
 marker = itertools.cycle(('d', 'v', 'o', '*'))
@@ -23,6 +19,7 @@ linewidth = itertools.cycle((3.5, 2, 3.5, 2, 3.5, 2, 3.5, 2))
 mpl.rcParams['axes.prop_cycle'] = (cycler(color=['tab:blue', 'tab:red', 'tab:orange', 'tab:cyan','tab:pink', 'tab:purple', 'tab:green',  'tab:brown', 'tab:olive',  'tab:grey','black']) * cycler(linestyle = ['--', '-']))
 color=itertools.cycle(('tab:blue', 'tab:red', 'tab:orange', 'tab:cyan','tab:pink', 'tab:purple', 'tab:green',  'tab:brown', 'tab:olive',  'tab:grey','black'))
 
+cpu_number = 10
 
 def load_call():
     data = pd.read_csv('../call-Reality.txt', sep=" ", header=None)
@@ -251,13 +248,43 @@ def load_message():
         month.append(int(t[5:7]))
         
     month = np.array(month)
+    total_num = np.size(np.unique(month))
     no_loop_index = np.where(node1 != node2)[0]
     data_matrix = np.vstack((month, node1, node2, weight))
     data_no_loop = data_matrix[:, no_loop_index]
     month = data_no_loop[0]
 
     index_separate = [np.where(month == i)[0][-1] for i in range(np.min(np.unique(month)), np.max(np.unique(month)) +1 )]
-    return data_no_loop, index_separate, N_total
+    node_list = []
+    neighbor_list = []
+    pair_list = []
+    for i, j in zip(np.append(0, index_separate[:-1]), index_separate):
+        neighbor_dict = {}
+        pairs = []
+        data_month = data_no_loop[:, i:j]
+        nodes = np.unique(data_month[1:])
+        node_list.append(nodes)
+        node1 = data_month[1]
+        node2 = data_month[2]
+        for n1, n2 in zip(node1, node2):
+            if n1 in neighbor_dict.keys():
+                neighbor_dict[n1].extend([n2])
+            else:
+                neighbor_dict[n1] = [n2]
+            if n2 in neighbor_dict.keys():
+                neighbor_dict[n2].extend([n1])
+            else:
+                neighbor_dict[n2] = [n1]
+
+            if n1<n2:
+                pairs.append([n1, n2])
+            elif n1>n2:
+                pairs.append([n2, n1])
+        neighbor_list.append(neighbor_dict)
+        pair_set = set([tuple(i) for i in pairs])
+        pair_list.append(pair_set)
+    return total_num, node_list, neighbor_list, pair_list
+
 
 def load_caviar():
     """TODO: Docstring for snapshot_network.
@@ -446,8 +473,8 @@ def node_age(node_list):
                 age.append(i)
     mapping = dict(zip(node_set, age))
     return mapping
-
-def coauthor_CN(index, mapping, neighbor_list, pair_set, weights, age_effect):
+    
+def coauthor_CN(index, mapping, neighbor_list, pair_set, weights, age_effect, exist):
     """TODO: Docstring for coauthor_oneshot.
 
     :arg1: TODO
@@ -455,6 +482,7 @@ def coauthor_CN(index, mapping, neighbor_list, pair_set, weights, age_effect):
 
     """
     "node pair 1st < 2nd; no repetition"
+    t1 = time.time()
     CN_all = set()
     neighbor_weighted = {}
     neighbor_only = {}
@@ -473,6 +501,8 @@ def coauthor_CN(index, mapping, neighbor_list, pair_set, weights, age_effect):
             neighbor_only[node] = list(node_neighbor.keys())
     CN_all = set()
     node_all = list(neighbor_only.keys())
+
+    t2 = time.time()
     for node in node_all:
         neighbor = neighbor_only[node]
         if np.size(neighbor) > 1:
@@ -483,11 +513,17 @@ def coauthor_CN(index, mapping, neighbor_list, pair_set, weights, age_effect):
                     CN_all.add((j, i))
 
     CN_set = pair_set.union(CN_all) - pair_set
-    CN_info, top_edge = CN_value(index, mapping, CN_set, node_all, neighbor_only, neighbor_weighted)
-    CN_exist_info, top_exsit_edge = CN_value(index, mapping, pair_set, node_all, neighbor_only, neighbor_weighted)
-    return CN_info, top_edge, CN_exist_info, top_exsit_edge
+    CN_dict, CN_info, top_edge = CN_value(index, mapping, weights, CN_set, node_all, neighbor_only, neighbor_weighted)
+    if exist:
+        CN_exist_dict, CN_exist_info, top_exist_edge = CN_value(index, mapping, weights, pair_set, node_all, neighbor_only, neighbor_weighted)
+    else:
+        CN_exist_dict = []
+        CN_exist_info = []
+        top_exist_edge = []
+    t3 = time.time()
+    return CN_dict, CN_info, top_edge, CN_exist_dict, CN_exist_info, top_exist_edge
 
-def CN_value(index, mapping, CN_set, node_all, neighbor_only, neighbor_weighted):
+def CN_value(index, mapping, weights, CN_set, node_all, neighbor_only, neighbor_weighted):
     """TODO: Docstring for CN_value.
 
     :arg1: TODO
@@ -511,9 +547,10 @@ def CN_value(index, mapping, CN_set, node_all, neighbor_only, neighbor_weighted)
                     else:
                         CN_dict[i, j] = neighbor_count
 
-    CN_values = list(CN_dict.values())
-    weighted = np.array([np.sum(i) for i in CN_values])
-    unweighted = np.array([np.size(i) for i in CN_values])
+    if weights == 'weighted':
+        score = np.array([sum(i) for i in CN_dict.values()])
+    else:
+        score = np.array([len(i) for i in CN_dict.values()])
     edges = np.array(list(CN_dict.keys()))
     node1 = edges[:, 0]
     node2 = edges[:, 1]
@@ -522,21 +559,20 @@ def CN_value(index, mapping, CN_set, node_all, neighbor_only, neighbor_weighted)
         a = 1
         age1 = index - np.array([mapping[int(i)] for i in node1])
         age2 = index - np.array([mapping[int(i)] for i in node2])
-        weighted_age = weighted * np.log(age1 +a) * np.log(age2 +a)
-        unweighted_age = unweighted * np.log(age1 +a) * np.log(age2 +a)
+        score_age = score * np.log(age1 +a) * np.log(age2 +a)
     else:
-        weighted_age = weighted
-        unweighted_age = unweighted
+        score_age = score
 
-    CN_info = np.vstack((node1, node2, weighted_age, unweighted_age)).transpose()
+    CN_info = np.vstack((node1, node2, score_age)).transpose()
     if weights == 'weighted':
-        sort_order = np.argsort(CN_info[:, 2])[::-1]
+        sort_order = np.argsort(score_age)[::-1]
     elif weights == 'unweighted':
-        sort_order = np.argsort(CN_info[:, 3])[::-1]
+        sort_order = np.argsort(score_age)[::-1]
     top_edge = CN_info[sort_order, :2]
     CN_sort = CN_info[sort_order]
 
-    return CN_sort, top_edge
+    return CN_dict, CN_sort, top_edge
+
 
 def original_construct(dataset, co):
     """TODO: Docstring for intermediate.
@@ -575,7 +611,7 @@ def original_construct(dataset, co):
 
     return total_num, node_list, neighbor_list, pair_list
 
-def augmented(index, mapping, neighbor_index, pair_set, intermediate_num, weights, age_effect):
+def augmented(index, mapping, neighbor_index, top_edge, pair_set, intermediate_num, age_effect):
     """TODO: Docstring for augmented.
 
     :arg1: TODO
@@ -583,10 +619,11 @@ def augmented(index, mapping, neighbor_index, pair_set, intermediate_num, weight
 
     """
 
-    CN_info, top_edge, _, _ = coauthor_CN(index, mapping, neighbor_index, pair_set, weights, age_effect)
 
     "intermediate network"
+    t1 = time.time()
     intermediate_pair_set = pair_set.union(set([tuple(i) for i in top_edge[:intermediate_num]]))
+    t2 = time.time()
     intermediate_neighbor_dict =  {}
     for i, j in top_edge[:intermediate_num]:
         if i in intermediate_neighbor_dict.keys():
@@ -597,15 +634,17 @@ def augmented(index, mapping, neighbor_index, pair_set, intermediate_num, weight
             intermediate_neighbor_dict[j].extend([i])
         else:
             intermediate_neighbor_dict[j] = [i]
+    t3 = time.time()
     intermediate_neighbor_list = np.append(neighbor_index, intermediate_neighbor_dict)
+    t4 = time.time()
 
-    intermediate_CN_info, intermediate_top_edge, _, _ = coauthor_CN(index, mapping, intermediate_neighbor_list, pair_set, 'unweighted', age_effect)
+    intermediate_CN_dict, intermediate_CN_info, intermediate_top_edge, _, _, _ = coauthor_CN(index, mapping, intermediate_neighbor_list, pair_set, 'unweighted', age_effect, 0)
+    t5 = time.time()
 
-    CN_dict = {}
-    for i in intermediate_CN_info:
-        CN_dict[tuple(i[:2].astype(int))] = i[2:].tolist()
-    CN_pair = set(CN_dict.keys())
-    return CN_dict, CN_pair, intermediate_pair_set, intermediate_neighbor_list 
+    CN_unweighted = {x: len(y) for x, y in intermediate_CN_dict.items()}
+    CN_pair = set(CN_unweighted.keys())
+    t7 = time.time()
+    return CN_unweighted, CN_pair
 
 def AUC(pair_set_future, pair_set, node_index, CN_dict, CN_pair, interval, auc_method):
     """TODO: Docstring for AUC.
@@ -667,12 +706,12 @@ def AUC(pair_set_future, pair_set, node_index, CN_dict, CN_pair, interval, auc_m
     else:
         p_new = np.hstack((np.ones(num_new_cn), num_new_nocn))/(num_new_cn + num_new_nocn)
         p_non = np.hstack((np.ones(num_non_cn), num_non_nocn))/(num_non_cn + num_non_nocn)
-        new_score = np.vstack((np.array(new), np.array([0,0])))
-        non_score = np.vstack((np.array(non), np.array([0,0])))
+        new_score = np.hstack((np.array(new), 0))
+        non_score = np.hstack((np.array(non), 0))
 
     realization = 1000000
-    new_choose = np.random.choice(np.array(new_score)[:, 1], realization, p = p_new)
-    non_choose = np.random.choice(np.array(non_score)[:, 1], realization, p = p_non)
+    new_choose = np.random.choice(np.array(new_score), realization, p = p_new)
+    non_choose = np.random.choice(np.array(non_score), realization, p = p_non)
     auc = (np.sum(new_choose - non_choose>0) + 0.5*np.sum(new_choose == non_choose))/realization
     return auc
 
@@ -772,12 +811,13 @@ def ane(dataset, co, index_range, weights, percentage_range, interval, auc_metho
         total_num, node_list, neighbor_list, pair_list = load_caviar()
     elif dataset == 'email':
         total_num, node_list, neighbor_list, pair_list = load_email()
+    elif dataset == 'message':
+        total_num, node_list, neighbor_list, pair_list = load_message()
     if age_effect: 
         mapping = node_age(node_list)
     else:
         mapping = 0
     for index, i in zip(index_range, range(np.size(index_range))):
-        print(i)
         neighbor_index = neighbor_list[:index+1]
         pair_index = pair_list[:index+1]
         node_index = np.unique(np.concatenate(node_list[:index+1]))
@@ -793,23 +833,19 @@ def ane(dataset, co, index_range, weights, percentage_range, interval, auc_metho
         for pair_i in pair_future:
             pair_set_future = pair_i.union(pair_set_future)
 
-        CN_info, top_edge, CN_exist_info, top_exsit_edge = coauthor_CN(index, mapping, neighbor_index, pair_set, weights, age_effect)
-        if weights == 'weighted':
-            exist_ave = np.mean(CN_exist_info[:, 2], 0)
-            possible_num = np.size(np.where(CN_info[:, 2] >exist_ave )[0])
-        else:
-            exist_ave = np.mean(CN_exist_info[:, 3], 0)
-            possible_num = np.size(np.where(CN_info[:, 3] >exist_ave )[0])
+        CN_dict, CN_info, top_edge, CN_exist_dict, CN_exist_info, top_exsit_edge = coauthor_CN(index, mapping, neighbor_index, pair_set, weights, age_effect, 1)
 
-        CN_dict, CN_pair, _, _ = augmented(index, mapping, neighbor_index, pair_set, possible_num, weights, age_effect)
+        exist_ave = np.mean(CN_exist_info[:, 2], 0)
+        possible_num = np.size(np.where(CN_info[:, 2] >exist_ave )[0])
+
+        CN_dict, CN_pair = augmented(index, mapping, neighbor_index, top_edge, pair_set, possible_num, age_effect)
         auc_opt[i] = AUC(pair_set_future, pair_set, node_index, CN_dict, CN_pair, interval, auc_method)
 
         intermediate_range = np.array(len(top_edge) * percentage_range, int)
         for intermediate_num, j in zip(intermediate_range, range(np.size(intermediate_range))):
             t1 = time.time()
-            CN_dict, CN_pair, intermediate_pair_set, intermediate_neighbor_list = augmented(index, mapping, neighbor_index, pair_set, intermediate_num, weights, age_effect)
+            CN_dict, CN_pair = augmented(index, mapping, neighbor_index, top_edge, pair_set, intermediate_num, age_effect)
 
-            _, _, CN_inter_info, top_inter_edge = coauthor_CN(index, mapping, intermediate_neighbor_list, intermediate_pair_set, weights, age_effect)
             auc[i, j] = AUC(pair_set_future, pair_set, node_index, CN_dict, CN_pair, interval, auc_method)
 
             t2 = time.time()
@@ -849,12 +885,14 @@ n_set = np.arange(10, 100, 10)
 intermediate_range = np.arange(0, 20, 1)
 dataset = 'Bali1'
 index_range = np.arange(8, 17, 1)
-dataset = 'email'
 dataset = 'Caviar'
-index_range = np.arange(0, 10, 1)
 dataset = 'DBLP'
-index_range = np.arange(0, 9, 1)
-percentage_range = np.arange(0, 0.9, 0.1)
+index_range = np.arange(0, 1, 1)
+dataset = 'message'
+dataset = 'email'
+index_range = np.arange(0, 8, 1)
+
+percentage_range = np.arange(0, 1, 0.1)
 interval = 1000
 auc_method = 'BKS'
 auc_method = 'MC'
