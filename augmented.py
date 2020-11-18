@@ -386,11 +386,25 @@ def terrorist(dataset):
         node1 = list(data.iloc[1:, 2])
         node2 = list(data.iloc[1:, 3])
 
+    elif dataset == 'AQ':
+        data = pd.read_csv('../AQ_Relations_Public_Version2.csv', header=None)
+        tie_year = list(data.iloc[1:, 5])
+        node1 = list(data.iloc[1:, 1])
+        node2 = list(data.iloc[1:, 3])
+
+
     elif dataset == 'Bali1':
         data = pd.read_csv('../Bali1_Relations_Public_Version2.csv', header=None)
         tie_year = list(data.iloc[1:, 4])
         node1 = list(data.iloc[1:, 2])
         node2 = list(data.iloc[1:, 3])
+
+    elif dataset == 'Bali2':
+        data = pd.read_csv('../Bali2_Relations_Public_Version2.csv', header=None)
+        tie_year = list(data.iloc[1:, 4])
+        node1 = list(data.iloc[1:, 2])
+        node2 = list(data.iloc[1:, 3])
+
 
 
     year = []
@@ -549,7 +563,7 @@ def CN_value(index, mapping, weights, CN_set, node_all, neighbor_only, neighbor_
 
     if weights == 'weighted':
         score = np.array([sum(i) for i in CN_dict.values()])
-    else:
+    elif weights == 'unweighted':
         score = np.array([len(i) for i in CN_dict.values()])
     edges = np.array(list(CN_dict.keys()))
     node1 = edges[:, 0]
@@ -564,10 +578,7 @@ def CN_value(index, mapping, weights, CN_set, node_all, neighbor_only, neighbor_
         score_age = score
 
     CN_info = np.vstack((node1, node2, score_age)).transpose()
-    if weights == 'weighted':
-        sort_order = np.argsort(score_age)[::-1]
-    elif weights == 'unweighted':
-        sort_order = np.argsort(score_age)[::-1]
+    sort_order = np.argsort(score_age)[::-1]
     top_edge = CN_info[sort_order, :2]
     CN_sort = CN_info[sort_order]
 
@@ -584,12 +595,12 @@ def original_construct(dataset, co):
     :returns: TODO
 
     """
-    if dataset == 'AE' or dataset == 'CE' or dataset == 'Bali1':
+    if dataset == 'AE' or dataset == 'AQ' or dataset == 'CE' or dataset == 'Bali1' or dataset == 'Bali2':
         node_simplex_collection = terrorist(dataset)
         node_simplex_select = node_simplex_collection
         total_num = len(node_simplex_select)
 
-    elif dataset == 'DBLP':
+    elif dataset == 'DBLP' or dataset == 'MAG-Geology' or dataset == 'MAG-History':
         time_start, time_end, node_nverts_order, node_simplex_order = load_coauthor(dataset, co)
         node_simplex_select = node_simplex_order[time_select[0]-time_start:time_select[1]-time_start + 1]
         total_num = time_select[1] - time_select[0] +1
@@ -639,6 +650,7 @@ def augmented(index, mapping, neighbor_index, top_edge, pair_set, intermediate_n
     t4 = time.time()
 
     intermediate_CN_dict, intermediate_CN_info, intermediate_top_edge, _, _, _ = coauthor_CN(index, mapping, intermediate_neighbor_list, pair_set, 'unweighted', age_effect, 0)
+    #intermediate_CN_dict, intermediate_CN_info, intermediate_top_edge, _, _, _ = coauthor_CN(index, mapping, intermediate_neighbor_list, intermediate_pair_set, 'unweighted', age_effect, 0)
     t5 = time.time()
 
     CN_unweighted = {x: len(y) for x, y in intermediate_CN_dict.items()}
@@ -723,7 +735,7 @@ def intermediate_auc(dataset, co, index_range, weights, percentage_range, interv
 
     """
     auc = np.zeros((np.size(index_range), np.size(percentage_range)))
-    if dataset == 'AE' or dataset == 'CE' or dataset == 'Bali1' or dataset == 'DBLP':
+    if dataset == 'AE' or dataset == 'AQ' or dataset == 'CE' or dataset == 'Bali1' or dataset == 'Bali2' or dataset == 'DBLP':
         total_num, node_list, neighbor_list, pair_list = original_construct(dataset, co)
     elif dataset == 'Caviar':
         total_num, node_list, neighbor_list, pair_list = load_caviar()
@@ -793,7 +805,7 @@ def intermediate_auc(dataset, co, index_range, weights, percentage_range, interv
     #plt.show()
     return auc
 
-def ane(dataset, co, index_range, weights, percentage_range, interval, auc_method, age_effect, cutoff):
+def auc_opt(dataset, co, index_range, weights, percentage_range, interval, auc_method, age_effect, cutoff):
     """TODO: Docstring for ane.
 
     :arg1: TODO
@@ -801,11 +813,11 @@ def ane(dataset, co, index_range, weights, percentage_range, interval, auc_metho
 
     """
 
-    weighted_score = np.zeros((np.size(index_range), np.size(percentage_range)))
-    unweighted_score = np.zeros((np.size(index_range), np.size(percentage_range)))
     auc_opt = np.zeros((np.size(index_range)))
+    auc_max = np.zeros((np.size(index_range)))
+    opt_percentage = np.zeros((np.size(index_range)))
     auc = np.zeros((np.size(index_range), np.size(percentage_range)))
-    if dataset == 'AE' or dataset == 'CE' or dataset == 'Bali1' or dataset == 'DBLP':
+    if dataset == 'AE' or dataset == 'AQ' or dataset == 'CE' or dataset == 'Bali1' or dataset == 'Bali2' or dataset == 'DBLP':
         total_num, node_list, neighbor_list, pair_list = original_construct(dataset, co)
     elif dataset == 'Caviar':
         total_num, node_list, neighbor_list, pair_list = load_caviar()
@@ -835,11 +847,14 @@ def ane(dataset, co, index_range, weights, percentage_range, interval, auc_metho
 
         CN_dict, CN_info, top_edge, CN_exist_dict, CN_exist_info, top_exsit_edge = coauthor_CN(index, mapping, neighbor_index, pair_set, weights, age_effect, 1)
 
-        exist_ave = np.mean(CN_exist_info[:, 2], 0)
-        possible_num = np.size(np.where(CN_info[:, 2] >exist_ave )[0])
+        exist_ave = np.min(CN_exist_info[:, 2], 0)
+        #exist_ave = 1
+        possible_num = np.size(np.where(CN_info[:, 2] >np.floor(exist_ave) )[0])
+        print(exist_ave)
 
         CN_dict, CN_pair = augmented(index, mapping, neighbor_index, top_edge, pair_set, possible_num, age_effect)
         auc_opt[i] = AUC(pair_set_future, pair_set, node_index, CN_dict, CN_pair, interval, auc_method)
+        opt_percentage[i] = possible_num/len(top_edge)
 
         intermediate_range = np.array(len(top_edge) * percentage_range, int)
         for intermediate_num, j in zip(intermediate_range, range(np.size(intermediate_range))):
@@ -847,11 +862,145 @@ def ane(dataset, co, index_range, weights, percentage_range, interval, auc_metho
             CN_dict, CN_pair = augmented(index, mapping, neighbor_index, top_edge, pair_set, intermediate_num, age_effect)
 
             auc[i, j] = AUC(pair_set_future, pair_set, node_index, CN_dict, CN_pair, interval, auc_method)
-
+            auc_max[i] = np.max(auc[i])
             t2 = time.time()
             print(i, j, t2-t1)
+    plot_order = np.argsort(auc[:, 0])[::-1]
 
-    return auc, auc_opt
+    fig, ax = plt.subplots()
+    for i in range(np.size(index_range)):
+        auc_index = plot_order[i]
+        auc_i = auc[auc_index] 
+        index_max = np.argmax(auc_i)
+        plt.plot(percentage_range[:index_max+1], auc_i[: index_max+1],  alpha=alpha_c)
+        plt.plot(percentage_range[index_max:], auc_i[index_max:],  alpha = alpha_c, label=f'{plot_order[i]+1}')
+        color_plot=next(color)
+        plt.plot(0, auc_i[0], 'o' , markersize=6, color=color_plot)
+        plt.plot(opt_percentage[auc_index], auc_opt[auc_index], '*', markersize=8, color=color_plot)
+
+    plt.xlabel('$p$', fontsize=fs)
+    if auc_method == 'MC':
+        plt.ylabel('AUC1', fontsize=fs)
+    elif auc_method == 'BKS':
+        plt.ylabel('AUC2', fontsize=fs)
+    ax.yaxis.set_label_position("right")
+    ax.yaxis.tick_right()
+
+    plt.subplots_adjust(left=0.15, right=0.85, wspace=0.25, hspace=0.25, bottom=0.20, top=0.95)
+    plt.xticks(fontsize=ticksize)
+    plt.yticks(fontsize=ticksize)
+    plt.legend(fontsize=legendsize, loc='upper left', bbox_to_anchor=(-0.22, 1.0), framealpha=0)
+    plt.locator_params(axis='x', nbins=5)
+    #save_des = '../manuscript/manuscript090820/figure/'+ dataset + weights 
+    #plt.savefig(save_des+ '.svg', format="svg") 
+    #plt.savefig(save_des + '.png') 
+
+
+    #plt.close('all')
+    plt.show()
+
+    data = np.vstack((np.hstack((np.round(percentage_range, 2), np.array([0, 0, 0]))), np.vstack((auc.transpose(), auc_max,auc_opt, opt_percentage)).transpose()))
+    data_df = pd.DataFrame(data.transpose())
+    data_df.to_csv('../data/' + dataset +auc_method+ str(percentage_range[-1]) + '.csv', mode='a', index=False, header=False)
+
+    return auc, auc_max, auc_opt, opt_percentage
+
+def aen(dataset, co, index_range, weights):
+    """TODO: Docstring for ane.
+
+    :arg1: TODO
+    :returns: TODO
+
+    """
+
+    exist_score = np.zeros((np.size(index_range)))
+    if dataset == 'AE' or dataset == 'AQ' or dataset == 'CE' or dataset == 'Bali1' or dataset == 'Bali2' or dataset == 'DBLP' or dataset == 'MAG-Geology' or dataset == 'MAG-History':
+        total_num, node_list, neighbor_list, pair_list = original_construct(dataset, co)
+    elif dataset == 'Caviar':
+        total_num, node_list, neighbor_list, pair_list = load_caviar()
+    elif dataset == 'email':
+        total_num, node_list, neighbor_list, pair_list = load_email()
+    elif dataset == 'message':
+        total_num, node_list, neighbor_list, pair_list = load_message()
+    if age_effect: 
+        mapping = node_age(node_list)
+    else:
+        mapping = 0
+    for index, i in zip(index_range, range(np.size(index_range))):
+        neighbor_index = neighbor_list[:index+1]
+        pair_index = pair_list[:index+1]
+        node_index = np.unique(np.concatenate(node_list[:index+1]))
+        pair_set = set()
+        for pair_i in pair_index:
+            pair_set = pair_i.union(pair_set)
+
+        future_index = min(index+1+3, total_num)
+        future_index = total_num
+        neighbor_future = neighbor_list[:future_index]
+        pair_future = pair_list[:future_index]
+        pair_set_future = set()
+        for pair_i in pair_future:
+            pair_set_future = pair_i.union(pair_set_future)
+
+        CN_dict, CN_info, top_edge, CN_exist_dict, CN_exist_info, top_exist_edge = coauthor_CN(index, mapping, neighbor_index, pair_set, weights, age_effect, 1)
+
+        num_nocn = len(pair_set) - len(top_exist_edge)
+        score = np.sum(CN_exist_info[:, 2])/len(pair_set)
+        average_degree = 2 * len(pair_set)/len(np.unique(np.hstack((node_index))))
+        exist_score[i] = score/average_degree
+        print(CN_exist_info[:, 2], average_degree, exist_score[i])
+
+        #data.to_csv('../data/' + dataset + str(percentage_range[-1]) + '.csv', mode='a', index=False, header=False)
+
+
+    return exist_score
+
+def plot_auc(dataset, auc_method, percentage_range):
+    """TODO: Docstring for plot_auc.
+
+    :arg1: TODO
+    :returns: TODO
+
+    """
+
+    data = np.array(pd.read_csv('../data/' + dataset + auc_method+ str(percentage_range[-1]) + '.csv', header =None))
+    auc = data[:-3, 1:].transpose()
+    plot_order = np.argsort(auc[:, 0])[::-1]
+    auc_max = data[-3, 1:]
+    auc_opt = data[-2, 1:]
+    opt_percentage = data[-1, 1:]
+
+    fig, ax = plt.subplots()
+    for i in range(np.size(index_range)):
+        auc_index = plot_order[i]
+        auc_i = auc[auc_index] 
+        index_max = np.argmax(auc_i)
+        plt.plot(percentage_range[:index_max+1], auc_i[: index_max+1],  alpha=alpha_c)
+        plt.plot(percentage_range[index_max:], auc_i[index_max:],  alpha = alpha_c, label=f'{plot_order[i]+1}')
+        color_plot=next(color)
+        plt.plot(0, auc_i[0], 'o' , markersize=6, color=color_plot)
+        plt.plot(opt_percentage[auc_index], auc_opt[auc_index], '*', markersize=8, color=color_plot)
+
+    plt.xlabel('$p$', fontsize=fs)
+    if auc_method == 'MC':
+        plt.ylabel('AUC1', fontsize=fs)
+    elif auc_method == 'BKS':
+        plt.ylabel('AUC2', fontsize=fs)
+    ax.yaxis.set_label_position("right")
+    ax.yaxis.tick_right()
+
+    plt.subplots_adjust(left=0.15, right=0.85, wspace=0.25, hspace=0.25, bottom=0.20, top=0.95)
+    plt.xticks(fontsize=ticksize)
+    plt.yticks(fontsize=ticksize)
+    plt.legend(fontsize=legendsize, loc='upper left', bbox_to_anchor=(-0.22, 1.0), framealpha=0)
+    plt.locator_params(axis='x', nbins=5)
+    #save_des = '../manuscript/manuscript090820/figure/'+ dataset + weights 
+    #plt.savefig(save_des+ '.svg', format="svg") 
+    #plt.savefig(save_des + '.png') 
+
+
+    #plt.close('all')
+    plt.show()
 
 
 
@@ -865,10 +1014,7 @@ markersize = 8
 alpha_c = 0.8
 lw = 3
 
-dataset = 'MAG-History'
-dataset = 'MAG-Geology'
 dataset = 'terrorism'
-dataset = 'CE'
 co = 1  # the counted paper have more than one author.
 index = 2
 time_select = [1997, 2006]
@@ -883,25 +1029,64 @@ n_set = np.arange(10, 100, 10)
 #intermediate_num = 0
 #auc = intermediate(dataset, co, index, weights, S, intermediate_num3
 intermediate_range = np.arange(0, 20, 1)
-dataset = 'Bali1'
-index_range = np.arange(8, 17, 1)
-dataset = 'Caviar'
+
+
+
+
+dataset = 'MAG-Geology'
+index_range = np.arange(0, 2, 1)
+
 dataset = 'DBLP'
-index_range = np.arange(0, 1, 1)
+index_range = np.arange(0, 9, 1)
+
+
 dataset = 'message'
+index_range = np.arange(0, 8, 1)
+
 dataset = 'email'
 index_range = np.arange(0, 8, 1)
 
-percentage_range = np.arange(0, 1, 0.1)
+
+
+
+
+"not good"
+dataset = 'CE'
+index_range = np.arange(6, 15, 1)
+
+"data too small"
+dataset = 'Bali2'
+index_range = np.arange(5, 11, 1)
+
+"not good"
+dataset = 'AE'
+index_range = np.arange(1, 9, 1)
+
+dataset = 'MAG-History'
+index_range = np.arange(0, 10, 1)
+
+
+dataset = 'Caviar'
+index_range = np.arange(0, 8, 1)
+
+dataset = 'AQ'
+index_range = np.arange(0, 9, 1)
+
+
+dataset = 'Bali1'
+index_range = np.arange(9, 16, 1)
+
+percentage_range = np.arange(0, 1, 0.01)
 interval = 1000
 auc_method = 'BKS'
 auc_method = 'MC'
 age_effect = 0
 cutoff = 0
 #auc = intermediate_auc(dataset, co, index_range, weights, percentage_range, interval, auc_method, age_effect, cutoff)
-auc, auc_opt= ane(dataset, co, index_range, weights, percentage_range, interval, auc_method, age_effect, cutoff)
+auc, auc_max, auc_opt, opt_percentage = auc_opt(dataset, co, index_range, weights, percentage_range, interval, auc_method, age_effect, cutoff)
 #auc = AUC(dataset, co, index, weights, S)
 #S_auc(dataset, co, index, [S])
+#plot_auc(dataset, auc_method, percentage_range)
 '''
 S_set  = np.array([0, 0.01, 0.1, 0.2, 0.5, 1, 5, 10])
 for index in range(1, 2, 1):
@@ -910,4 +1095,4 @@ for index in range(1, 2, 1):
 '''
 
 
-
+#score = aen(dataset, co, index_range, weights)
